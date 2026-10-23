@@ -4,11 +4,11 @@ Copyright IBM Corp. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
-// Package pqc provides a BCCSP implementation backed by liboqs-go.
+// Package pqc provides a post-quantum BCCSP implementation.
 //
-// The signature implementation supports the standardized ML-DSA-44,
-// ML-DSA-65, and ML-DSA-87 algorithms. The KEM implementation supports the
-// standardized ML-KEM-512, ML-KEM-768, and ML-KEM-1024 algorithms.
+// ML-DSA-44, ML-DSA-65 and ML-DSA-87 signatures use Go's crypto/mldsa.
+// ML-KEM-512, ML-KEM-768 and ML-KEM-1024 key encapsulation use liboqs-go,
+// which also handles legacy seedless ML-DSA keys.
 package pqc
 
 import (
@@ -227,17 +227,20 @@ func (c *CSP) KeyGen(opts bccsp.KeyGenOpts) (bccsp.Key, error) {
 	return generated, nil
 }
 
+// generateSignatureKey creates an ML-DSA key with crypto/mldsa. The key is
+// held as its FIPS 204 seed, the same form cryptogen writes as PKCS#8.
 func generateSignatureKey(algorithm string) (bccsp.Key, error) {
-	sig := oqs.Signature{}
-	if err := sig.Init(algorithm, nil); err != nil {
-		return nil, err
-	}
-	defer sig.Clean()
-	public, err := sig.GenerateKeyPair()
+	params, err := mldsaParameters(algorithm)
 	if err != nil {
 		return nil, err
 	}
-	return &key{algorithm: algorithm, private: true, secret: append([]byte(nil), sig.ExportSecretKey()...), public: public}, nil
+	sk, err := mldsa.GenerateKey(params)
+	if err != nil {
+		return nil, err
+	}
+	seed := sk.Bytes()
+	defer clear(seed)
+	return newSeedKey(algorithm, seed)
 }
 
 func generateKEMKey(algorithm string) (bccsp.Key, error) {
@@ -318,7 +321,11 @@ func (c *CSP) KeyImport(raw interface{}, opts bccsp.KeyImportOpts) (bccsp.Key, e
 			imported = &key{algorithm: algorithm, private: true, secret: append([]byte(nil), data...), public: append([]byte(nil), opts.PublicKey...)}
 		}
 	case *PublicKeyImportOpts:
-		imported = &key{algorithm: algorithm, public: append([]byte(nil), data...)}
+		public, err := publicKeyImportBytes(algorithm, data)
+		if err != nil {
+			return nil, err
+		}
+		imported = &key{algorithm: algorithm, public: public}
 	default:
 		return nil, errors.New("use PrivateKeyImportOpts or PublicKeyImportOpts")
 	}
@@ -337,13 +344,45 @@ func (c *CSP) KeyImport(raw interface{}, opts bccsp.KeyImportOpts) (bccsp.Key, e
 	return imported, nil
 }
 
+// publicKeyImportBytes returns the raw public key for a PublicKeyImportOpts
+// import. Raw bytes are used as given; an ML-DSA key may also be PKIX DER,
+// such as public Bytes() or a <ski>_pk file.
+func publicKeyImportBytes(algorithm string, data []byte) ([]byte, error) {
+	if !signatureAlgorithms[algorithm] {
+		return append([]byte(nil), data...), nil
+	}
+	params, err := mldsaParameters(algorithm)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == params.PublicKeySize() {
+		return append([]byte(nil), data...), nil
+	}
+	parsed, err := x509.ParsePKIXPublicKey(data)
+	if err != nil {
+		return nil, fmt.Errorf("%s public key is neither %d raw bytes nor PKIX DER: %w", algorithm, params.PublicKeySize(), err)
+	}
+	pub, ok := parsed.(*mldsa.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf("PKIX public key is %T, not an ML-DSA key", parsed)
+	}
+	if pub.Parameters() != params {
+		return nil, fmt.Errorf("PKIX public key is %s, not %s", pub.Parameters(), algorithm)
+	}
+	return pub.Bytes(), nil
+}
+
 func validatePrivateKey(k *key) error {
 	if len(k.seed) > 0 {
 		return nil // already validated by mldsa.NewPrivateKey in newSeedKey
 	}
+	secret := secretCopy(k.secret)
+	defer clear(secret)
 	if signatureAlgorithms[k.algorithm] {
+		// Legacy seedless ML-DSA keys only: an expanded liboqs secret can be
+		// checked by liboqs, not by crypto/mldsa.
 		sig := oqs.Signature{}
-		if err := sig.Init(k.algorithm, k.secret); err != nil {
+		if err := sig.Init(k.algorithm, secret); err != nil {
 			return err
 		}
 		defer sig.Clean()
@@ -353,7 +392,7 @@ func validatePrivateKey(k *key) error {
 		return nil
 	}
 	kem := oqs.KeyEncapsulation{}
-	if err := kem.Init(k.algorithm, k.secret); err != nil {
+	if err := kem.Init(k.algorithm, secret); err != nil {
 		return err
 	}
 	defer kem.Clean()
@@ -365,13 +404,12 @@ func validatePrivateKey(k *key) error {
 
 func validatePublicKey(k *key) error {
 	if signatureAlgorithms[k.algorithm] {
-		sig := oqs.Signature{}
-		if err := sig.Init(k.algorithm, nil); err != nil {
+		params, err := mldsaParameters(k.algorithm)
+		if err != nil {
 			return err
 		}
-		defer sig.Clean()
-		if len(k.public) != sig.Details().LengthPublicKey {
-			return errors.New("invalid ML-DSA public-key length")
+		if _, err := mldsa.NewPublicKey(params, k.public); err != nil {
+			return fmt.Errorf("invalid %s public key: %w", k.algorithm, err)
 		}
 		return nil
 	}
@@ -442,11 +480,15 @@ func (c *CSP) Sign(k bccsp.Key, digest []byte, _ bccsp.SignerOpts) ([]byte, erro
 		if err != nil {
 			return nil, err
 		}
-		// nil opts: sign the message directly with an empty context, as liboqs does.
+		// nil opts: sign the given bytes directly with an empty context, as Verify checks them.
 		return sk.Sign(nil, digest, nil)
 	}
+	// Legacy seedless ML-DSA keys only: crypto/mldsa cannot sign with an
+	// expanded liboqs secret, so liboqs does.
+	secret := secretCopy(key.secret)
+	defer clear(secret)
 	sig := oqs.Signature{}
-	if err := sig.Init(key.algorithm, key.secret); err != nil {
+	if err := sig.Init(key.algorithm, secret); err != nil {
 		return nil, err
 	}
 	defer sig.Clean()
@@ -461,12 +503,18 @@ func (c *CSP) Verify(k bccsp.Key, signature, digest []byte, _ bccsp.SignerOpts) 
 	if !signatureAlgorithms[key.algorithm] {
 		return false, errors.New("key is not an ML-DSA verification key")
 	}
-	sig := oqs.Signature{}
-	if err := sig.Init(key.algorithm, nil); err != nil {
+	params, err := mldsaParameters(key.algorithm)
+	if err != nil {
 		return false, err
 	}
-	defer sig.Clean()
-	return sig.Verify(digest, signature, key.public)
+	pub, err := mldsa.NewPublicKey(params, key.public)
+	if err != nil {
+		return false, fmt.Errorf("invalid %s public key: %w", key.algorithm, err)
+	}
+	// Verify the bytes exactly as Sign signs them: directly, with an empty
+	// context (the MSP passes SHA-256(msg)). With a valid public key, any
+	// mldsa.Verify error means the signature does not verify.
+	return mldsa.Verify(pub, digest, signature, nil) == nil, nil
 }
 
 func (c *CSP) Encapsulate(k bccsp.Key) ([]byte, []byte, error) {
@@ -493,12 +541,21 @@ func (c *CSP) Decapsulate(k bccsp.Key, ciphertext []byte) ([]byte, error) {
 	if !kemAlgorithms[key.algorithm] {
 		return nil, errors.New("key is not an ML-KEM key")
 	}
+	secret := secretCopy(key.secret)
+	defer clear(secret)
 	kem := oqs.KeyEncapsulation{}
-	if err := kem.Init(key.algorithm, key.secret); err != nil {
+	if err := kem.Init(key.algorithm, secret); err != nil {
 		return nil, err
 	}
 	defer kem.Clean()
 	return kem.DecapSecret(ciphertext)
+}
+
+// secretCopy returns a copy of a secret key for liboqs. oqs Init keeps the
+// slice it is given and Clean wipes it, so liboqs must never see key.secret
+// itself. Callers clear the copy when done.
+func secretCopy(secret []byte) []byte {
+	return append([]byte(nil), secret...)
 }
 
 func (c *CSP) Encrypt(bccsp.Key, []byte, bccsp.EncrypterOpts) ([]byte, error) {
@@ -545,10 +602,18 @@ func NewFileKeyStore(path string, password []byte) (*FileKeyStore, error) {
 	return &FileKeyStore{path: path, password: append([]byte(nil), password...)}, nil
 }
 func (s *FileKeyStore) ReadOnly() bool { return false }
+
+// StoreKey writes ML-DSA private keys as PKCS#8 PEM to <ski>_sk and ML-DSA
+// public keys as PKIX PEM to <ski>_pk, as the SW keystore and cryptogen do.
+// ML-KEM keys keep the JSON <ski>.pqc format (AES-GCM when a password is
+// set), because Go's PKCS#8 has no ML-KEM encoding.
 func (s *FileKeyStore) StoreKey(k bccsp.Key) error {
 	value, err := asKey(k)
 	if err != nil {
 		return err
+	}
+	if signatureAlgorithms[value.algorithm] {
+		return s.storeMLDSAKey(value)
 	}
 	data, err := json.Marshal(storedKey{Algorithm: value.algorithm, Private: value.private, Secret: encode(value.secret), Public: encode(value.public), Seed: encode(value.seed)})
 	if err != nil {
@@ -562,10 +627,110 @@ func (s *FileKeyStore) StoreKey(k bccsp.Key) error {
 	defer s.mu.Unlock()
 	return os.WriteFile(filepath.Join(s.path, hex.EncodeToString(value.SKI())+".pqc"), data, 0o600)
 }
+
+func (s *FileKeyStore) storeMLDSAKey(k *key) error {
+	params, err := mldsaParameters(k.algorithm)
+	if err != nil {
+		return err
+	}
+	var block *pem.Block
+	var suffix string
+	if k.private {
+		if len(s.password) > 0 {
+			return fmt.Errorf("cannot store %s private key: ML-DSA private keys are stored as unencrypted PKCS#8 PEM, and a keystore password is not supported for them", k.algorithm)
+		}
+		if len(k.seed) == 0 {
+			return fmt.Errorf("cannot store %s private key without its seed: PKCS#8 holds only the FIPS 204 seed, so import an expanded liboqs secret as Temporary", k.algorithm)
+		}
+		sk, err := mldsa.NewPrivateKey(params, k.seed)
+		if err != nil {
+			return err
+		}
+		der, err := x509.MarshalPKCS8PrivateKey(sk)
+		if err != nil {
+			return err
+		}
+		defer clear(der)
+		block, suffix = &pem.Block{Type: "PRIVATE KEY", Bytes: der}, "_sk"
+	} else {
+		pub, err := mldsa.NewPublicKey(params, k.public)
+		if err != nil {
+			return err
+		}
+		der, err := x509.MarshalPKIXPublicKey(pub)
+		if err != nil {
+			return err
+		}
+		block, suffix = &pem.Block{Type: "PUBLIC KEY", Bytes: der}, "_pk"
+	}
+	data := pem.EncodeToMemory(block)
+	defer clear(data)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !k.private {
+		if s.holdsMLDSAPrivateKey(k.SKI()) {
+			return nil
+		}
+		// The private key may be under another file name, e.g. cryptogen's
+		// priv_sk; GetKey's scan would find it only after <ski>_pk.
+		if found, err := s.searchKeystoreForSKI(k.SKI()); err == nil {
+			clear(found.(*key).seed)
+			return nil
+		}
+	}
+	return os.WriteFile(filepath.Join(s.path, hex.EncodeToString(k.SKI())+suffix), data, 0o600)
+}
+
+// holdsMLDSAPrivateKey reports whether the private key for ski is already
+// stored as <ski>_sk or as a legacy ML-DSA <ski>.pqc. StoreKey then skips
+// writing <ski>_pk, which GetKey would read before a legacy .pqc file.
+func (s *FileKeyStore) holdsMLDSAPrivateKey(ski []byte) bool {
+	name := hex.EncodeToString(ski)
+	if _, err := os.Stat(filepath.Join(s.path, name+"_sk")); err == nil {
+		return true
+	}
+	data, err := os.ReadFile(filepath.Join(s.path, name+".pqc"))
+	if err != nil {
+		return false
+	}
+	data, err = s.unprotect(data)
+	if err != nil {
+		return false
+	}
+	defer clear(data)
+	var saved storedKey
+	return json.Unmarshal(data, &saved) == nil && saved.Private && signatureAlgorithms[saved.Algorithm]
+}
+
+// GetKey looks up <ski>_sk, then <ski>_pk, then the legacy <ski>.pqc, and
+// finally scans the keystore for a PKCS#8 ML-DSA key under any file name
+// (e.g. cryptogen's priv_sk).
 func (s *FileKeyStore) GetKey(ski []byte) (bccsp.Key, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	data, err := os.ReadFile(filepath.Join(s.path, hex.EncodeToString(ski)+".pqc"))
+	name := hex.EncodeToString(ski)
+	for _, f := range []struct {
+		suffix string
+		parse  func([]byte) (*key, error)
+	}{{"_sk", parseMLDSAPrivatePEM}, {"_pk", parseMLDSAPublicPEM}} {
+		data, err := os.ReadFile(filepath.Join(s.path, name+f.suffix))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		k, err := f.parse(data)
+		clear(data)
+		if err != nil {
+			return nil, fmt.Errorf("%s%s: %w", name, f.suffix, err)
+		}
+		if !bytes.Equal(k.SKI(), ski) {
+			return nil, fmt.Errorf("%s%s holds a key with a different SKI", name, f.suffix)
+		}
+		return k, nil
+	}
+	data, err := os.ReadFile(filepath.Join(s.path, name+".pqc"))
 	if errors.Is(err, fs.ErrNotExist) {
 		return s.searchKeystoreForSKI(ski)
 	}
@@ -581,6 +746,49 @@ func (s *FileKeyStore) GetKey(ski []byte) (bccsp.Key, error) {
 		return nil, err
 	}
 	return &key{algorithm: saved.Algorithm, private: saved.Private, secret: decode(saved.Secret), public: decode(saved.Public), seed: decode(saved.Seed)}, nil
+}
+
+func parseMLDSAPrivatePEM(data []byte) (*key, error) {
+	block, _ := pem.Decode(data)
+	if block == nil || block.Type != "PRIVATE KEY" {
+		return nil, errors.New("not a PRIVATE KEY PEM block")
+	}
+	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	clear(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	sk, ok := parsed.(*mldsa.PrivateKey)
+	if !ok {
+		return nil, fmt.Errorf("PKCS#8 key is %T, not an ML-DSA key", parsed)
+	}
+	algorithm, err := mldsaAlgorithm(sk.PublicKey().Bytes())
+	if err != nil {
+		return nil, err
+	}
+	seed := sk.Bytes()
+	defer clear(seed)
+	return newSeedKey(algorithm, seed)
+}
+
+func parseMLDSAPublicPEM(data []byte) (*key, error) {
+	block, _ := pem.Decode(data)
+	if block == nil || block.Type != "PUBLIC KEY" {
+		return nil, errors.New("not a PUBLIC KEY PEM block")
+	}
+	parsed, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	pub, ok := parsed.(*mldsa.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf("PKIX key is %T, not an ML-DSA key", parsed)
+	}
+	algorithm, err := mldsaAlgorithm(pub.Bytes())
+	if err != nil {
+		return nil, err
+	}
+	return &key{algorithm: algorithm, public: pub.Bytes()}, nil
 }
 
 // searchKeystoreForSKI scans the keystore for a PKCS8 PEM ML-DSA private key
