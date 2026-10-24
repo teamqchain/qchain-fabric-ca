@@ -126,7 +126,7 @@ func BccspBackedSigner(caFile, keyFile string, policy *config.Signing, csp bccsp
 }
 
 // getBCCSPKeyOpts generates a key as specified in the request.
-// This supports ECDSA and RSA.
+// This supports ECDSA, RSA and, in builds with the pqc tag, ML-DSA-44.
 func getBCCSPKeyOpts(kr *csr.KeyRequest, ephemeral bool) (opts bccsp.KeyGenOpts, err error) {
 	if kr == nil {
 		return &bccsp.ECDSAKeyGenOpts{Temporary: ephemeral}, nil
@@ -158,6 +158,12 @@ func getBCCSPKeyOpts(kr *csr.KeyRequest, ephemeral bool) (opts bccsp.KeyGenOpts,
 		default:
 			return nil, errors.Errorf("Invalid ECDSA key size: %d", kr.Size())
 		}
+	case "mldsa44":
+		// The parameter set fixes the key size; a size is not accepted.
+		if kr.Size() != 0 {
+			return nil, errors.Errorf("Invalid mldsa44 key size: %d (omit the size or set it to 0)", kr.Size())
+		}
+		return mldsa44KeyGenOpts(ephemeral)
 	default:
 		return nil, errors.Errorf("Invalid algorithm: %s", kr.Algo())
 	}
