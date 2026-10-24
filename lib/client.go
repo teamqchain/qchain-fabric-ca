@@ -620,7 +620,7 @@ func (c *Client) newCertificateRequest(req *api.CSRInfo, id string) *csr.Certifi
 
 		keyRequest := req.KeyRequest
 		if keyRequest == nil || (keyRequest.Size == 0 && keyRequest.Algo == "") {
-			keyRequest = api.NewKeyRequest()
+			keyRequest = c.defaultKeyRequest()
 		}
 		cr.KeyRequest = newCfsslKeyRequest(keyRequest)
 
@@ -633,9 +633,20 @@ func (c *Client) newCertificateRequest(req *api.CSRInfo, id string) *csr.Certifi
 		cr.Hosts = []string{hostname}
 	}
 
-	cr.KeyRequest = newCfsslKeyRequest(api.NewKeyRequest())
+	cr.KeyRequest = newCfsslKeyRequest(c.defaultKeyRequest())
 
 	return cr
+}
+
+// defaultKeyRequest is the key request used when the caller gives none:
+// mldsa44 when bccsp.default is PQC, otherwise cfssl's default ECDSA P-256.
+func (c *Client) defaultKeyRequest() *api.KeyRequest {
+	if c.Config != nil {
+		if kr := pqcKeyRequest(c.Config.CSP); kr != nil {
+			return kr
+		}
+	}
+	return api.NewKeyRequest()
 }
 
 // newIdemixCredentialRequest returns CredentialRequest object, a secret key, and a random number used in

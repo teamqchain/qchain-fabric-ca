@@ -9,17 +9,13 @@ SPDX-License-Identifier: Apache-2.0
 
 package lib
 
-import (
-	"strings"
-
-	"github.com/hyperledger/fabric-ca/api"
-)
+import "github.com/hyperledger/fabric-ca/api"
 
 // GetKeyRequest constructs and returns api.KeyRequest object based on the bccsp
 // configuration options
 func GetKeyRequest(cfg *CAConfig) *api.KeyRequest {
-	if strings.ToUpper(cfg.CSP.Default) == "PQC" {
-		return &api.KeyRequest{Algo: "mldsa44"}
+	if kr := pqcKeyRequest(cfg.CSP); kr != nil {
+		return kr
 	}
 	if cfg.CSP.SW != nil {
 		return &api.KeyRequest{Algo: "ecdsa", Size: cfg.CSP.SW.Security}
