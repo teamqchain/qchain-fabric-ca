@@ -51,6 +51,11 @@ func ConfigureBCCSP(optsPtr **factory.FactoryOpts, mspDir, homeDir string) error
 			opts.SW.FileKeystore.KeyStorePath = path.Join("msp", "keystore")
 		}
 	}
+	if strings.ToUpper(opts.Default) == "PQC" {
+		if err = configurePQCOpts(opts, mspDir); err != nil {
+			return err
+		}
+	}
 	err = makeFileNamesAbsolute(opts, homeDir)
 	if err != nil {
 		return errors.WithMessage(err, "Failed to make BCCSP files absolute")

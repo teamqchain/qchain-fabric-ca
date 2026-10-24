@@ -16,6 +16,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"os"
+	"path"
 	"strings"
 	_ "time" // for ocspSignerFromConfig
 
@@ -70,7 +71,29 @@ func makeFileNamesAbsolute(opts *factory.FactoryOpts, homeDir string) error {
 		fks := opts.SW.FileKeystore
 		fks.KeyStorePath, err = MakeFileAbs(fks.KeyStorePath, homeDir)
 	}
+	if err == nil && opts != nil && opts.PQC != nil {
+		opts.PQC.KeyStorePath, err = MakeFileAbs(opts.PQC.KeyStorePath, homeDir)
+	}
 	return err
+}
+
+// configurePQCOpts fills in the PQC BCCSP options. As for SW, the mspDir
+// overrides the keystore path; otherwise a configured path is kept, or
+// msp/keystore is used. A keystore password is rejected: the PQC BCCSP stores
+// ML-DSA private keys as unencrypted PKCS#8.
+func configurePQCOpts(opts *factory.FactoryOpts, mspDir string) error {
+	if opts.PQC == nil {
+		opts.PQC = &factory.PQCOpts{}
+	}
+	if len(opts.PQC.Password) > 0 {
+		return errors.New("bccsp.pqc.password is not supported: the PQC BCCSP stores ML-DSA private keys unencrypted; remove the password")
+	}
+	if mspDir != "" {
+		opts.PQC.KeyStorePath = path.Join(mspDir, "keystore")
+	} else if opts.PQC.KeyStorePath == "" {
+		opts.PQC.KeyStorePath = path.Join("msp", "keystore")
+	}
+	return nil
 }
 
 // BccspBackedSigner attempts to create a signer using csp bccsp.BCCSP. This csp could be SW (golang crypto)
