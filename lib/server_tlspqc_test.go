@@ -97,8 +97,8 @@ func TestServerStartRefusesPQCTLSWithoutKeyFile(t *testing.T) {
 }
 
 // The guard does not refuse a PQC CA with external TLS files or with TLS
-// disabled. Start may still fail later in CA initialization; that is not
-// this guard.
+// disabled. With the pqc tag such a server starts; without it there is no
+// PQC BCCSP, so Start fails in BCCSP initialization instead.
 func TestServerStartAllowsPQCWithExternalTLSOrTLSOff(t *testing.T) {
 	certFile, keyFile := writeECDSATLSFiles(t, t.TempDir())
 	for name, tls := range map[string]libtls.ServerTLSConfig{
@@ -107,12 +107,14 @@ func TestServerStartAllowsPQCWithExternalTLSOrTLSOff(t *testing.T) {
 	} {
 		srv := pqcTLSServer(t, t.TempDir(), "PQC", tls)
 		err := srv.Start()
-		if err == nil {
+		if pqcBuild {
+			require.NoError(t, err, "%s: a PQC CA starts", name)
 			require.NoError(t, srv.Stop())
 			continue
 		}
+		require.Error(t, err, name)
 		require.False(t, strings.Contains(err.Error(), "TLS without tls.keyfile is not supported"), "%s: refused by the TLS guard: %v", name, err)
-		t.Logf("%s: not refused by the TLS guard; Start stopped later with: %v", name, err)
+		require.Contains(t, err.Error(), "requires building with the pqc tag", name)
 	}
 }
 

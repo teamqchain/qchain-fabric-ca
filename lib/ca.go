@@ -24,7 +24,6 @@ import (
 	"github.com/cloudflare/cfssl/certdb"
 	"github.com/cloudflare/cfssl/config"
 	cfcsr "github.com/cloudflare/cfssl/csr"
-	"github.com/cloudflare/cfssl/initca"
 	"github.com/cloudflare/cfssl/log"
 	"github.com/cloudflare/cfssl/signer"
 	cflocalsigner "github.com/cloudflare/cfssl/signer/local"
@@ -353,8 +352,8 @@ func (ca *CA) getCACert() (cert []byte, err error) {
 		if err != nil {
 			return nil, err
 		}
-		// Call CFSSL to initialize the CA
-		cert, _, err = initca.NewFromSigner(&req, cspSigner)
+		// Create the self-signed root (via CFSSL, or for ML-DSA via GenerateCSR)
+		cert, _, err = util.NewRootCAFromSigner(&req, cspSigner)
 		if err != nil {
 			return nil, errors.WithMessage(err, "Failed to create new CA certificate")
 		}
