@@ -38,18 +38,19 @@ func readCert(t *testing.T, p []byte) *x509.Certificate {
 // (role=issuer) and bob in its configured registry.
 func startPQCServer(t *testing.T) (*Server, string, string) {
 	t.Helper()
-	home := t.TempDir()
-	port := freePort(t)
-	srv := getServer(port, home, "", -1, t)
-	require.NotNil(t, srv)
-	srv.CA.Config.CSP = &factory.FactoryOpts{Default: "PQC"}
-	srv.CA.Config.Registry.Identities = append(srv.CA.Config.Registry.Identities,
-		CAConfigIdentity{Name: "alice", Pass: "alicepw", Type: "client", MaxEnrollments: -1, Attrs: map[string]string{"role": "issuer"}},
-		CAConfigIdentity{Name: "bob", Pass: "bobpw", Type: "client", MaxEnrollments: -1},
-	)
-	require.NoError(t, srv.Start(), "a CA with bccsp.default PQC initializes and starts")
-	t.Cleanup(func() { srv.Stop() })
-	return srv, home, fmt.Sprintf("http://localhost:%d", port)
+	// startTestServer fails the test unless a CA with bccsp.default PQC
+	// initializes and starts.
+	srv := startTestServer(t, func(port int) *Server {
+		srv := getServer(port, t.TempDir(), "", -1, t)
+		require.NotNil(t, srv)
+		srv.CA.Config.CSP = &factory.FactoryOpts{Default: "PQC"}
+		srv.CA.Config.Registry.Identities = append(srv.CA.Config.Registry.Identities,
+			CAConfigIdentity{Name: "alice", Pass: "alicepw", Type: "client", MaxEnrollments: -1, Attrs: map[string]string{"role": "issuer"}},
+			CAConfigIdentity{Name: "bob", Pass: "bobpw", Type: "client", MaxEnrollments: -1},
+		)
+		return srv
+	})
+	return srv, srv.HomeDir, fmt.Sprintf("http://localhost:%d", srv.Config.Port)
 }
 
 func pqcEnroll(t *testing.T, url, name, secret string, attrs []*api.AttributeRequest) *EnrollmentResponse {

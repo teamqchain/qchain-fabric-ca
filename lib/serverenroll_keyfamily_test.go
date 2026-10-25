@@ -24,15 +24,15 @@ import (
 
 func startKeyFamilyServer(t *testing.T, caKey *api.KeyRequest) (*Server, string) {
 	t.Helper()
-	port := freePort(t)
-	srv := getServer(port, t.TempDir(), "", -1, t)
-	require.NotNil(t, srv)
-	if caKey != nil {
-		srv.CA.Config.CSR.KeyRequest = caKey
-	}
-	require.NoError(t, srv.Start())
-	t.Cleanup(func() { srv.Stop() })
-	return srv, fmt.Sprintf("http://localhost:%d", port)
+	srv := startTestServer(t, func(port int) *Server {
+		srv := getServer(port, t.TempDir(), "", -1, t)
+		require.NotNil(t, srv)
+		if caKey != nil {
+			srv.CA.Config.CSR.KeyRequest = caKey
+		}
+		return srv
+	})
+	return srv, fmt.Sprintf("http://localhost:%d", srv.Config.Port)
 }
 
 func enrollAdmin(t *testing.T, url string, kr *api.KeyRequest, client *Client) (*x509.Certificate, error) {
