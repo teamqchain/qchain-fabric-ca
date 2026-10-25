@@ -191,6 +191,9 @@ func processSignRequest(id string, req *signer.SignRequest, ca *CA, ctx *serverR
 	if err != nil {
 		return err
 	}
+	if err = ca.checkCSRKeyFamily(csrReq); err != nil {
+		return caerrors.NewHTTPErr(400, caerrors.ErrBadCSR, "%s", err)
+	}
 	log.Debugf("Processing sign request: id=%s, CommonName=%s, Subject=%+v", id, csrReq.Subject.CommonName, req.Subject)
 	if (req.Subject != nil && req.Subject.CN != id) || csrReq.Subject.CommonName != id {
 		return caerrors.NewHTTPErr(403, caerrors.ErrCNInvalidEnroll, "The CSR subject common name must equal the enrollment ID")

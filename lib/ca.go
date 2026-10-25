@@ -1077,6 +1077,21 @@ func (ca *CA) getCACertExpiry() (time.Time, time.Time, error) {
 	return notBefore, notAfter, nil
 }
 
+// checkCSRKeyFamily returns an error if the CSR's key is not in the same key
+// family (ML-DSA or classical) as the certificate the CA's enrollment signer
+// signs with.
+func (ca *CA) checkCSRKeyFamily(csrReq *x509.CertificateRequest) error {
+	signer, ok := ca.enrollSigner.(*cflocalsigner.Signer)
+	if !ok {
+		return errors.New("Unexpected error while checking the CSR key: the enrollSigner can only be cfssl/signer/local/Signer")
+	}
+	caCert, err := signer.Certificate("", "ca")
+	if err != nil {
+		return errors.WithMessage(err, "Failed to get the CA certificate")
+	}
+	return util.CheckCSRKeyFamily(csrReq, caCert)
+}
+
 func canSignCRL(cert *x509.Certificate) bool {
 	return cert.KeyUsage&x509.KeyUsageCRLSign != 0
 }

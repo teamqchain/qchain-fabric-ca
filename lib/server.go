@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net"
@@ -893,6 +894,17 @@ func (s *Server) autoGenerateTLSCertificateKey() error {
 	csr, _, err := client.GenCSR(&csrReq, hostname)
 	if err != nil {
 		return fmt.Errorf("Failed to generate CSR: %s", err)
+	}
+	block, _ := pem.Decode(csr)
+	if block == nil {
+		return errors.New("Failed to decode the generated TLS CSR")
+	}
+	parsedCSR, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		return fmt.Errorf("Failed to parse the generated TLS CSR: %s", err)
+	}
+	if err = s.CA.checkCSRKeyFamily(parsedCSR); err != nil {
+		return fmt.Errorf("Failed to generate TLS certificate: %s", err)
 	}
 
 	// Use the 'tls' profile that will return a certificate with the appropriate extensions
