@@ -162,6 +162,20 @@ func CreateToken(csp bccsp.BCCSP, cert []byte, key bccsp.Key, method, uri string
 		if err != nil {
 			return "", err
 		}
+	default:
+		if !isMLDSAPublicKey(publicKey) {
+			alg := x509Cert.PublicKeyAlgorithm.String()
+			if x509Cert.PublicKeyAlgorithm == x509.UnknownPublicKeyAlgorithm {
+				alg = "unknown"
+			}
+			return "", errors.Errorf("token authentication is not supported for %s keys", alg)
+		}
+		// An ML-DSA token has the same format: the BCCSP signs the SHA-256
+		// digest of the same payload, so VerifyToken checks it unchanged.
+		token, err = GenECDSAToken(csp, cert, key, method, uri, body)
+		if err != nil {
+			return "", err
+		}
 	}
 	return token, nil
 }

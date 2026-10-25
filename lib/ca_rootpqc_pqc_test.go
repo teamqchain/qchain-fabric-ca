@@ -34,9 +34,15 @@ func readCert(t *testing.T, p []byte) *x509.Certificate {
 	return cert
 }
 
-// startPQCServer starts a CA with bccsp.default PQC, TLS off, and alice
-// (role=issuer) and bob in its configured registry.
-func startPQCServer(t *testing.T) (*Server, string, string) {
+// The configured registry of TestPQCServerRootCAAndEnrollments.
+var (
+	pqcAlice = CAConfigIdentity{Name: "alice", Pass: "alicepw", Type: "client", MaxEnrollments: -1, Attrs: map[string]string{"role": "issuer"}}
+	pqcBob   = CAConfigIdentity{Name: "bob", Pass: "bobpw", Type: "client", MaxEnrollments: -1}
+)
+
+// startPQCServer starts a CA with bccsp.default PQC, TLS off, and ids in
+// its configured registry besides the bootstrap admin.
+func startPQCServer(t *testing.T, ids ...CAConfigIdentity) (*Server, string, string) {
 	t.Helper()
 	// startTestServer fails the test unless a CA with bccsp.default PQC
 	// initializes and starts.
@@ -44,10 +50,7 @@ func startPQCServer(t *testing.T) (*Server, string, string) {
 		srv := getServer(port, t.TempDir(), "", -1, t)
 		require.NotNil(t, srv)
 		srv.CA.Config.CSP = &factory.FactoryOpts{Default: "PQC"}
-		srv.CA.Config.Registry.Identities = append(srv.CA.Config.Registry.Identities,
-			CAConfigIdentity{Name: "alice", Pass: "alicepw", Type: "client", MaxEnrollments: -1, Attrs: map[string]string{"role": "issuer"}},
-			CAConfigIdentity{Name: "bob", Pass: "bobpw", Type: "client", MaxEnrollments: -1},
-		)
+		srv.CA.Config.Registry.Identities = append(srv.CA.Config.Registry.Identities, ids...)
 		return srv
 	})
 	return srv, srv.HomeDir, fmt.Sprintf("http://localhost:%d", srv.Config.Port)
@@ -62,7 +65,7 @@ func pqcEnroll(t *testing.T, url, name, secret string, attrs []*api.AttributeReq
 }
 
 func TestPQCServerRootCAAndEnrollments(t *testing.T) {
-	_, home, url := startPQCServer(t)
+	_, home, url := startPQCServer(t, pqcAlice, pqcBob)
 
 	// The CA's own root is ML-DSA-44, self-signed, and its key is in the PQC
 	// keystore as <ski>_sk.
@@ -108,14 +111,11 @@ func TestPQCServerRootCAAndEnrollments(t *testing.T) {
 	}
 }
 
-// Registering through the API needs an authentication token from an
-// ML-DSA identity, which util.CreateToken does not produce yet (F7).
-func TestPQCServerRegisterBlockedUntilCreateToken(t *testing.T) {
-	_, _, url := startPQCServer(t)
-	admin := pqcEnroll(t, url, "admin", "adminpw", nil)
-	_, err := admin.Identity.Register(&api.RegistrationRequest{Name: "carol", Type: "client", Affiliation: "", Attributes: []api.Attribute{{Name: "role", Value: "issuer", ECert: true}}})
-	require.Error(t, err, "register works only once CreateToken handles ML-DSA (F7)")
-	t.Logf("register as an ML-DSA identity today: %v", err)
+// The token flow on a PQC CA with ML-DSA identities: register, enroll,
+// reenroll, revoke and gencrl all authenticate with ML-DSA tokens.
+func TestPQCServerTokenFlow(t *testing.T) {
+	srv, _, _ := startPQCServer(t)
+	tokenFlow(t, srv, &factory.FactoryOpts{Default: "PQC"}, "*mldsa.PublicKey")
 }
 
 // An ML-DSA CA refuses a classical CSR through the real enroll path (the
