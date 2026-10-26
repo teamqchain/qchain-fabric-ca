@@ -11,45 +11,16 @@ package lib
 
 import (
 	"crypto/mldsa"
-	"crypto/rand"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/hex"
-	"encoding/pem"
 	"fmt"
-	"math/big"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/hyperledger/fabric-lib-go/bccsp"
 	"github.com/hyperledger/fabric-lib-go/bccsp/factory"
 	"github.com/stretchr/testify/require"
 )
-
-// writeMLDSACAFiles writes a self-signed ML-DSA-44 CA certificate and its
-// PKCS#8 key to dir, as cryptogen lays out a CA (<name>-cert.pem, priv_sk).
-func writeMLDSACAFiles(t *testing.T, dir string, sk *mldsa.PrivateKey) (certFile, keyFile string) {
-	t.Helper()
-	tpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(42),
-		Subject:               pkix.Name{CommonName: "ca.org1.example.com", Organization: []string{"org1.example.com"}},
-		NotBefore:             time.Now().Add(-time.Minute),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tpl, tpl, sk.PublicKey(), sk)
-	require.NoError(t, err)
-	keyDER, err := x509.MarshalPKCS8PrivateKey(sk)
-	require.NoError(t, err)
-	certFile, keyFile = filepath.Join(dir, "ca.org1.example.com-cert.pem"), filepath.Join(dir, "priv_sk")
-	require.NoError(t, os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600))
-	require.NoError(t, os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0o600))
-	return certFile, keyFile
-}
 
 // pqcKeyfileServer returns a PQC CA configured with ca.certfile and
 // ca.keyfile.
@@ -66,9 +37,8 @@ func pqcKeyfileServer(t *testing.T, port int, certFile, keyFile string) *Server 
 // certificate as its root, stores the imported key as <ski>_sk, and issues
 // certificates that chain to it.
 func TestPQCServerStartsWithMLDSACertAndKeyFiles(t *testing.T) {
-	sk, err := mldsa.GenerateKey(mldsa.MLDSA44())
-	require.NoError(t, err)
-	certFile, keyFile := writeMLDSACAFiles(t, t.TempDir(), sk)
+	sk := newMLDSAKey(t)
+	certFile, keyFile := writeCAFiles(t, t.TempDir(), sk, sk)
 	rootPEM, err := os.ReadFile(certFile)
 	require.NoError(t, err)
 	root := readCert(t, rootPEM)
@@ -93,4 +63,22 @@ func TestPQCServerStartsWithMLDSACertAndKeyFiles(t *testing.T) {
 	require.NoError(t, leaf.CheckSignatureFrom(root), "the leaf chains to the configured root")
 	require.Equal(t, root.SubjectKeyId, leaf.AuthorityKeyId)
 	require.Equal(t, root.RawSubject, leaf.RawIssuer)
+}
+
+// A PQC CA given an ML-DSA certificate and a key file with another ML-DSA
+// key refuses to start, before it generates or stores anything.
+func TestPQCServerRefusesMismatchedMLDSACertAndKeyFiles(t *testing.T) {
+	certFile, keyFile := writeCAFiles(t, t.TempDir(), newMLDSAKey(t), newMLDSAKey(t))
+	srv := pqcKeyfileServer(t, freePort(t), certFile, keyFile)
+	err := srv.Start()
+	if err == nil {
+		srv.Stop()
+		require.FailNow(t, "the CA started with a mismatched certificate and key")
+	}
+	require.Contains(t, err.Error(), fmt.Sprintf("Invalid certificate and/or key in files '%s' and '%s': Public key and private key do not match", certFile, keyFile))
+	keys, err := filepath.Glob(filepath.Join(srv.HomeDir, "msp", "keystore", "*"))
+	require.NoError(t, err)
+	require.Empty(t, keys, "no key was stored")
+	_, err = os.Stat(filepath.Join(srv.HomeDir, "ca-cert.pem"))
+	require.True(t, os.IsNotExist(err), "no root was generated")
 }

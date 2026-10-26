@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"crypto/dsa"
 	"crypto/ecdsa"
+	"crypto/mldsa"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
@@ -1193,6 +1194,23 @@ func validateMatchingKeys(cert *x509.Certificate, keyFile string) error {
 		if privKey.PublicKey.X.Cmp(pubKey.X) != 0 {
 			return errors.New("Public key and private key do not match")
 		}
+	case *mldsa.PublicKey:
+		// The key is parsed in every build; using it needs the PQC BCCSP.
+		privKey, err := util.PEMtoPrivateKey(keyPEM, nil)
+		if err != nil {
+			return err
+		}
+		mldsaKey, ok := privKey.(*mldsa.PrivateKey)
+		if !ok {
+			return errors.Errorf("Public key and private key do not match: the certificate has an ML-DSA key and the private key is %T", privKey)
+		}
+		if !mldsaKey.PublicKey().Equal(pubKey) {
+			return errors.New("Public key and private key do not match")
+		}
+	default:
+		// Other key types are not checked here, as before ML-DSA support;
+		// the CA's signer is built from the key file without this check.
+		log.Debugf("Not checking that the private key matches a %T certificate key", pubKey)
 	}
 
 	return nil
