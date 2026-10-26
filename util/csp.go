@@ -9,6 +9,7 @@ package util
 import (
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/mldsa"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
@@ -234,6 +235,10 @@ func BCCSPKeyRequestGenerate(req *csr.CertificateRequest, myCSP bccsp.BCCSP) (bc
 	return key, cspSigner, nil
 }
 
+// errMLDSAKeyNeedsPQC is returned for an ML-DSA private key when the BCCSP
+// is not PQC, in every build.
+var errMLDSAKeyNeedsPQC = errors.New("ML-DSA private keys need the PQC BCCSP: build with -tags pqc and set bccsp.default to PQC")
+
 // ImportBCCSPKeyFromPEM attempts to create a private BCCSP key from a pem file keyFile
 func ImportBCCSPKeyFromPEM(keyFile string, myCSP bccsp.BCCSP, temporary bool) (bccsp.Key, error) {
 	keyBuff, err := os.ReadFile(keyFile)
@@ -253,6 +258,12 @@ func ImportBCCSPKeyFromPEM(keyFile string, myCSP bccsp.BCCSP, temporary bool) (b
 		sk, err := myCSP.KeyImport(priv, &bccsp.ECDSAPrivateKeyImportOpts{Temporary: temporary})
 		if err != nil {
 			return nil, errors.WithMessage(err, fmt.Sprintf("Failed to import ECDSA private key for '%s'", keyFile))
+		}
+		return sk, nil
+	case *mldsa.PrivateKey:
+		sk, err := importMLDSAPrivateKey(myCSP, key, temporary)
+		if err != nil {
+			return nil, errors.WithMessage(err, fmt.Sprintf("Failed to import ML-DSA private key for '%s'", keyFile))
 		}
 		return sk, nil
 	case *rsa.PrivateKey:
