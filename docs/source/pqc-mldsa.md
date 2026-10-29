@@ -174,11 +174,21 @@ csr:
   keyrequest:
     algo: mldsa44
 
+signing:
+  default:
+    usage:
+      - digital signature
+    expiry: 8760h
+
 bccsp:
   default: PQC
   pqc:
     keystorepath: msp/keystore
 ```
+
+Keep the `signing` section, as in the generated configuration file: without
+`signing.default.usage`, issued certificates get the key usage `Certificate
+Sign, CRL Sign` instead of `Digital Signature`, for any CA.
 
 Start it with `fabric-ca-server start`. As for any CA, the bootstrap
 identity comes from `registry.identities` when the configuration file
