@@ -266,6 +266,10 @@ func (c *ClientCmd) ConfigInit() error {
 		}
 	}
 
+	err = lib.CheckRawConfig(c.myViper)
+	if err != nil {
+		return errors.WithMessage(err, fmt.Sprintf("Invalid configuration in file '%s'", c.cfgFileName))
+	}
 	err = c.myViper.Unmarshal(c.clientCfg)
 	if err != nil {
 		return errors.Wrapf(err, "Incorrect format in file '%s'", c.cfgFileName)

@@ -20,6 +20,7 @@ import (
 	"github.com/grantae/certinfo"
 	"github.com/hyperledger/fabric-ca/api"
 	"github.com/hyperledger/fabric-ca/lib/caerrors"
+	"github.com/hyperledger/fabric-ca/util"
 	"github.com/pkg/errors"
 	"github.com/spf13/viper"
 )
@@ -67,6 +68,16 @@ func LoadPEMCertPool(certFiles []string) (*x509.CertPool, error) {
 	return certPool, nil
 }
 
+// CheckRawConfig checks the configuration in vp before it is decoded. A
+// bccsp.pqc.password is refused here, in every build: decoding it into the
+// BCCSP options fails with an error that shows the password.
+func CheckRawConfig(vp *viper.Viper) error {
+	if pw := vp.Get("bccsp.pqc.password"); pw != nil && fmt.Sprint(pw) != "" {
+		return util.ErrPQCPasswordNotSupported
+	}
+	return nil
+}
+
 // UnmarshalConfig unmarshals a configuration file
 func UnmarshalConfig(config interface{}, vp *viper.Viper, configFile string,
 	server bool) error {
@@ -75,6 +86,10 @@ func UnmarshalConfig(config interface{}, vp *viper.Viper, configFile string,
 	err := vp.ReadInConfig()
 	if err != nil {
 		return errors.Wrapf(err, "Failed to read config file '%s'", configFile)
+	}
+	err = CheckRawConfig(vp)
+	if err != nil {
+		return errors.WithMessage(err, fmt.Sprintf("Invalid configuration in file '%s'", configFile))
 	}
 
 	err = vp.Unmarshal(config)

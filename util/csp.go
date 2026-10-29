@@ -78,6 +78,10 @@ func makeFileNamesAbsolute(opts *factory.FactoryOpts, homeDir string) error {
 	return err
 }
 
+// ErrPQCPasswordNotSupported is returned for a bccsp.pqc.password, both by
+// configurePQCOpts and by the raw configuration check before decoding.
+var ErrPQCPasswordNotSupported = errors.New("bccsp.pqc.password is not supported: the PQC BCCSP stores ML-DSA private keys unencrypted; remove the password")
+
 // configurePQCOpts fills in the PQC BCCSP options. As for SW, the mspDir
 // overrides the keystore path; otherwise a configured path is kept, or
 // msp/keystore is used. A keystore password is rejected: the PQC BCCSP stores
@@ -87,7 +91,7 @@ func configurePQCOpts(opts *factory.FactoryOpts, mspDir string) error {
 		opts.PQC = &factory.PQCOpts{}
 	}
 	if len(opts.PQC.Password) > 0 {
-		return errors.New("bccsp.pqc.password is not supported: the PQC BCCSP stores ML-DSA private keys unencrypted; remove the password")
+		return ErrPQCPasswordNotSupported
 	}
 	if mspDir != "" {
 		opts.PQC.KeyStorePath = path.Join(mspDir, "keystore")

@@ -60,11 +60,11 @@ bccsp:
     `keystorepath` is ignored.
 - The keystore stores each ML-DSA private key unencrypted as PKCS#8 in a
   file named `<ski>_sk`. A keystore password is not supported: do not set
-  `bccsp.pqc.password`. A password in the YAML file currently fails while
-  the configuration is decoded, with a `cannot parse 'bccsp.PQC.Password[0]'`
-  error. A password that reaches the BCCSP configuration in any other way
-  fails with `bccsp.pqc.password is not supported: the PQC BCCSP stores
-  ML-DSA private keys unencrypted; remove the password`.
+  `bccsp.pqc.password`. A password in the server, CA or client
+  configuration file is refused before the file is decoded, without showing
+  the password: `Invalid configuration in file '<file>': bccsp.pqc.password
+  is not supported: the PQC BCCSP stores ML-DSA private keys unencrypted;
+  remove the password`.
 
 ### `csr.keyrequest`
 
