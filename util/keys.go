@@ -216,7 +216,8 @@ func PEMtoPrivateKey(raw []byte, pwd []byte) (interface{}, error) {
 	}
 	block, _ := pem.Decode(raw)
 	if block == nil {
-		return nil, fmt.Errorf("Failed decoding PEM. Block must be different from nil. [% x]", raw)
+		// The input is not echoed: it may be key material.
+		return nil, errors.New("Failed decoding PEM. Block must be different from nil.")
 	}
 
 	// TODO: derive from header the type of the key
@@ -252,7 +253,8 @@ func PEMtoAES(raw []byte, pwd []byte) ([]byte, error) {
 	}
 	block, _ := pem.Decode(raw)
 	if block == nil {
-		return nil, fmt.Errorf("Failed decoding PEM. Block must be different from nil. [% x]", raw)
+		// The input is not echoed: it may be key material.
+		return nil, errors.New("Failed decoding PEM. Block must be different from nil.")
 	}
 
 	if x509.IsEncryptedPEMBlock(block) {
@@ -423,7 +425,8 @@ func PEMtoPublicKey(raw []byte, pwd []byte) (interface{}, error) {
 	}
 	block, _ := pem.Decode(raw)
 	if block == nil {
-		return nil, fmt.Errorf("Failed decoding. Block must be different from nil. [% x]", raw)
+		// The input is not echoed, as for private keys.
+		return nil, errors.New("Failed decoding. Block must be different from nil.")
 	}
 
 	// TODO: derive from header the type of the key

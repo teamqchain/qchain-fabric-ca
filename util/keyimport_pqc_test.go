@@ -166,8 +166,7 @@ func TestImportMLDSAKeyBadInput(t *testing.T) {
 	}{
 		{"garbage", write("garbage", []byte("not a key")), "Failed parsing private key from " + filepath.Join(dir, "garbage") + ": Failed decoding PEM. Block must be different from nil."},
 		{"garbage in a PEM block", write("garbage-pem", pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: []byte("not a key")})), "Failed parsing private key from " + filepath.Join(dir, "garbage-pem") + ": Invalid key type. The DER must contain an rsa.PrivateKey or ecdsa.PrivateKey"},
-		// Truncated inside the PEM block: a file that is not PEM at all
-		// gets its bytes in hex in the error (PEMtoPrivateKey).
+		// Truncated inside the PEM block, so that DER parsing fails.
 		{"truncated key", write("truncated", pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: goodDER[:len(goodDER)/2]})), "Failed parsing private key from " + filepath.Join(dir, "truncated") + ": Invalid key type. The DER must contain an rsa.PrivateKey or ecdsa.PrivateKey"},
 		{"public key PEM", write("public", pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER})), "Failed parsing private key from " + filepath.Join(dir, "public") + ": Invalid key type. The DER must contain an rsa.PrivateKey or ecdsa.PrivateKey"},
 		{"ECDSA key", filepath.Join("testdata", "ec-key.pem"), "Failed to import ECDSA private key for 'testdata/ec-key.pem': unsupported PQC key-import algorithm \"ECDSA\""},
